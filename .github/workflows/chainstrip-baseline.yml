@@ -1,0 +1,75 @@
+name: chainstrip baseline (warm)
+
+# The heavy half of the split. Runs on trunk only, builds the full hardened
+# artifact (chainstrip run: inventory -> ... -> pack), and CACHES the ~1.4 GB
+# gate-baseline set keyed on yarn.lock. PRs restore this instead of rebuilding.
+# This is the expensive job — put it on a LARGER runner (set the repo/org
+# variable CHAINSTRIP_LARGE_RUNNER, e.g. "ubuntu-latest-8-cores"); it falls
+# back to a stock runner, which may be too small for Cal's build+suite.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: chainstrip-baseline
+  cancel-in-progress: false
+
+jobs:
+  warm:
+    runs-on: ${{ vars.CHAINSTRIP_LARGE_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 330
+    permissions:
+      contents: read
+      packages: read # read @chainstrip/cli from GitHub Packages with the ambient token
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: chainstrip
+          POSTGRES_PASSWORD: chainstrip
+          POSTGRES_DB: chainstrip
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U chainstrip"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      CHAINSTRIP_RUN_ORIGIN: ci
+      DATABASE_URL: postgresql://chainstrip:chainstrip@localhost:5432/chainstrip
+      NEXTAUTH_SECRET: chainstrip-buildgate-secret-0123456789abcdef
+      CALENDSO_ENCRYPTION_KEY: chainstrip-buildgate-key-0123456789ab
+      NEXT_PUBLIC_WEBAPP_URL: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+      - run: corepack enable
+      - run: yarn install --immutable
+      - uses: ./.github/actions/setup-chainstrip
+        with:
+          version: ${{ vars.CHAINSTRIP_CLI_VERSION || 'latest' }}
+      - name: build baseline
+        run: $CHAINSTRIP run
+      - name: cache the gate baseline
+        uses: actions/cache/save@v4
+        with:
+          key: chainstrip-baseline-${{ hashFiles('yarn.lock') }}
+          # exactly the set the gate reads — NOT .chainstrip/workspaces|bundles|runs
+          path: |
+            .chainstrip/artifacts
+            .chainstrip/extracted-deps
+            .chainstrip/inventory.json
+            .chainstrip/tiers.json
+            .chainstrip/test-impact-map.json
+            .chainstrip/covtrim-report.json
+            .chainstrip/prunec-report.json
+      - name: upload human-readable report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-report
+          path: .chainstrip/*-report.json
+          if-no-files-found: ignore

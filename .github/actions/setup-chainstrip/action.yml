@@ -1,0 +1,29 @@
+name: setup-chainstrip
+description: Install the prebuilt chainstrip CLI from GitHub Packages and expose it as $CHAINSTRIP.
+# CI-only and token-free: reads @chainstrip/cli from GitHub Packages with the
+# workflow's ambient GITHUB_TOKEN (the job needs `permissions: packages: read`).
+# No secret in this repo; the package is published from the private source repo.
+inputs:
+  package:
+    description: "the GitHub Packages npm package holding the CLI"
+    default: "@chainstrip/cli"
+  version:
+    description: "npm version or dist-tag (pin an exact version in real use)"
+    default: latest
+runs:
+  using: composite
+  steps:
+    - name: install & expose chainstrip
+      shell: bash
+      env:
+        NODE_AUTH_TOKEN: ${{ github.token }} # ambient repo token; only reads a package
+      run: |
+        set -euo pipefail
+        dst="$RUNNER_TEMP/chainstrip"; mkdir -p "$dst"
+        # scoped registry + token; npm expands ${NODE_AUTH_TOKEN} from env at read time
+        cat > "$dst/.npmrc" <<'EOF'
+        @chainstrip:registry=https://npm.pkg.github.com
+        //npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+        EOF
+        ( cd "$dst" && npm install "${{ inputs.package }}@${{ inputs.version }}" )
+        echo "CHAINSTRIP=node $dst/node_modules/${{ inputs.package }}/dist/cli.mjs" >> "$GITHUB_ENV"

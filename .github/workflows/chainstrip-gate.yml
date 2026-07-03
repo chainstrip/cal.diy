@@ -1,0 +1,75 @@
+name: chainstrip update gate
+
+# The light half of the split. Runs on every PR that touches dependencies,
+# RESTORES the baseline the trunk job cached, and runs the no-arg update scan:
+# it diffs the PR's installed tree against the baseline and classifies each
+# dependency change (new dep / expanded usage / version bump). A finding in the
+# block policy (chainstrip.config.json -> update.block) fails the check via a
+# non-zero exit. A reviewer waives a safe block by committing
+# chainstrip-approvals.json to the PR (see CHAINSTRIP.md).
+
+on:
+  pull_request:
+    paths:
+      - "package.json"
+      - "yarn.lock"
+      - "apps/**/package.json"
+      - "packages/**/package.json"
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read # read @chainstrip/cli from GitHub Packages with the ambient token
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: chainstrip
+          POSTGRES_PASSWORD: chainstrip
+          POSTGRES_DB: chainstrip
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U chainstrip"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      CHAINSTRIP_RUN_ORIGIN: ci
+      DATABASE_URL: postgresql://chainstrip:chainstrip@localhost:5432/chainstrip
+      NEXTAUTH_SECRET: chainstrip-buildgate-secret-0123456789abcdef
+      CALENDSO_ENCRYPTION_KEY: chainstrip-buildgate-key-0123456789ab
+      NEXT_PUBLIC_WEBAPP_URL: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+      - run: corepack enable
+      - run: yarn install --immutable
+      - name: restore the baseline (built on trunk)
+        uses: actions/cache/restore@v4
+        with:
+          key: chainstrip-baseline-${{ hashFiles('yarn.lock') }}
+          restore-keys: chainstrip-baseline-
+          path: |
+            .chainstrip/artifacts
+            .chainstrip/extracted-deps
+            .chainstrip/inventory.json
+            .chainstrip/tiers.json
+            .chainstrip/test-impact-map.json
+            .chainstrip/covtrim-report.json
+            .chainstrip/prunec-report.json
+      - uses: ./.github/actions/setup-chainstrip
+        with:
+          version: ${{ vars.CHAINSTRIP_CLI_VERSION || 'latest' }}
+      - name: gate the dependency change
+        run: $CHAINSTRIP update # no-arg scan; non-zero exit on a blocking verdict
+      - name: upload gate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-gate-report
+          path: .chainstrip/gate-report.json
+          if-no-files-found: ignore

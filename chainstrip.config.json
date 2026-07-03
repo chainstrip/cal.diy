@@ -1,0 +1,18 @@
+{
+  "target": ".",
+  "stateDir": ".chainstrip",
+  "testCommand": ["yarn", "vitest", "run"],
+  "maxMappedTests": 20,
+  "buildCommand": ["yarn", "next", "build", "--experimental-build-mode", "compile"],
+  "buildCwd": "apps/web",
+  "buildEnvFrom": ".env.example",
+  "buildEnv": {
+    "DATABASE_URL": "postgresql://chainstrip:chainstrip@localhost:5432/chainstrip",
+    "NEXTAUTH_SECRET": "chainstrip-buildgate-secret-0123456789abcdef",
+    "CALENDSO_ENCRYPTION_KEY": "chainstrip-buildgate-key-0123456789ab",
+    "NEXT_PUBLIC_WEBAPP_URL": "http://localhost:3000"
+  },
+  "update": {
+    "block": ["retained-surface-changed", "validation-regression", "capability-escalation", "manual-review-required", "expanded-usage-vulnerable", "new-dependency", "reachable-cve"]
+  }
+}
