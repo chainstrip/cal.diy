@@ -23,6 +23,7 @@ jobs:
     permissions:
       contents: read
       packages: read # read @chainstrip/cli from GitHub Packages with the ambient token
+      pull-requests: write # the sticky verdict comment (gate-pr-comment.mjs)
     services:
       postgres:
         image: postgres:16
@@ -66,6 +67,11 @@ jobs:
           version: ${{ vars.CHAINSTRIP_CLI_VERSION || 'latest' }}
       - name: gate the dependency change
         run: $CHAINSTRIP update # no-arg scan; non-zero exit on a blocking verdict
+      - name: comment the verdict on the PR # sticky: one comment, updated in place
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/gate-pr-comment.mjs "${{ github.event.pull_request.number }}"
       - name: upload gate report
         if: always()
         uses: actions/upload-artifact@v4
