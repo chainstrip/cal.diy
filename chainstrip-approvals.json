@@ -1,0 +1,11 @@
+[
+  {
+    "dep": "netmask",
+    "version": "1.0.6",
+    "classification": "new-dependency",
+    "fingerprint": "38fe050ea47d3d30",
+    "reason": "CIDR strings come from our own env configuration, never from request input — the octal-parsing advisories need attacker-controlled address strings to bite. Bump to netmask@2.0.1 is tracked for next sprint.",
+    "approvedBy": "kika",
+    "approvedAt": "2026-08-08T20:51:09.790Z"
+  }
+]

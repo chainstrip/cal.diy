@@ -3391,6 +3391,7 @@ __metadata:
     memory-cache: "npm:0.2.0"
     micro: "npm:10.0.1"
     module-alias: "npm:2.2.2"
+    netmask: "npm:1.0.6"
     next: "npm:16.2.3"
     next-auth: "npm:4.24.13"
     next-axiom: "npm:0.17.0"
@@ -31632,6 +31633,13 @@ __metadata:
     "@nestjs/common": ^5.0.0 || ^6.6.0 || ^7.0.0 || ^8.0.0 || ^9.0.0 || ^10.0.0
     winston: ^3.0.0
   checksum: 10/ae98b3bdcf2616a0f0faf2e93b512049571d1eb2c8a5dfed05e627ca8867505a30b7687c6edbcb6a21a892ba0b28d8934a7b4c02ce007420790e5618fae8e92d
+  languageName: node
+  linkType: hard
+
+"netmask@npm:1.0.6":
+  version: 1.0.6
+  resolution: "netmask@npm:1.0.6"
+  checksum: 10/37feb42c29ba1c655e225dd97586909372ba7e3f8f8c20e69ae87d423a68b34a86bc5784a70746fec29b632c7b629f140b087096d42df1fb1791375603f40e7c
   languageName: node
   linkType: hard
 
