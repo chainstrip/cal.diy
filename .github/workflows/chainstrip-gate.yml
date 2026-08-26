@@ -61,7 +61,7 @@ jobs:
             .chainstrip/tiers.json
             .chainstrip/test-impact-map.json
             .chainstrip/covtrim-report.json
-            .chainstrip/prunec-report.json
+            .chainstrip/fileprune-report.json
       - uses: ./.github/actions/setup-chainstrip
         with:
           version: ${{ vars.CHAINSTRIP_CLI_VERSION || 'latest' }}
