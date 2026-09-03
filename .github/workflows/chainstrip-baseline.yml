@@ -75,10 +75,20 @@ jobs:
             .chainstrip/test-impact-map.json
             .chainstrip/covtrim-report.json
             .chainstrip/fileprune-report.json
+      # `.chainstrip` IS A HIDDEN DIRECTORY, and upload-artifact@v4 defaults
+      # `include-hidden-files: false` - so this glob matched NOTHING, the step
+      # reported success, and the run produced zero artifacts. `ignore` is what
+      # made it silent: an empty upload and a healthy one looked identical, and
+      # the reports had to be scraped back out of the job log instead.
+      #
+      # `warn` rather than `error` because the step is `if: always()`: a run that
+      # dies before chainstrip writes anything legitimately has no reports, and
+      # failing there would report the wrong cause.
       - name: upload human-readable report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: baseline-report
           path: .chainstrip/*-report.json
-          if-no-files-found: ignore
+          include-hidden-files: true
+          if-no-files-found: warn
