@@ -42,11 +42,20 @@ jobs:
       NEXT_PUBLIC_WEBAPP_URL: http://localhost:3000
     steps:
       - uses: actions/checkout@v4
+      # `cache: yarn` makes setup-node shell out to `yarn --version` DURING its
+      # own step, so corepack has to be enabled BEFORE it runs. A GitHub-hosted
+      # image ships yarn on PATH and hides this; a self-hosted runner does not,
+      # and the step dies with "Unable to locate executable file: yarn" before
+      # any chainstrip step. So: provision node, enable corepack, THEN ask for
+      # the cache.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: corepack enable
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: yarn
-      - run: corepack enable
       - run: yarn install --immutable
       - uses: ./.github/actions/setup-chainstrip
         with:
