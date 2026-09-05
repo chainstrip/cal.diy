@@ -1,7 +1,8 @@
 {
   "target": ".",
   "stateDir": ".chainstrip",
-  "testCommand": ["yarn", "vitest", "run"],
+  "testCommand": ["yarn", "test"],
+  "testRunner": "vitest",
   "maxMappedTests": 20,
   "buildCommand": ["yarn", "next", "build", "--experimental-build-mode", "compile"],
   "buildCwd": "apps/web",
