@@ -94,6 +94,16 @@ jobs:
       - name: e2e browser (chromium, no-root libraries)
         env:
           PLAYWRIGHT_BROWSERS_PATH: "0"
+          # THE RUNNER IS UBUNTU 26.04 AND PLAYWRIGHT 1.57 DOES NOT KNOW IT. MEASURED
+          # (run 34003559291): `playwright install chromium` died in 1.5 minutes with
+          # "Playwright does not support chromium on ubuntu26.04-x64". The project pins
+          # @playwright/test 1.57.0, which predates that release; mattermost's 1.61.1
+          # knows it, so the same recipe worked there. This is Playwright's own knob
+          # (hostPlatform.js reads it first): the 24.04 build runs on 26.04's newer
+          # glibc, and the noble package names it lists exist on 26.04 too. The same
+          # lookup happens again when the e2e child LAUNCHES the browser, so the run
+          # steps below carry it as well.
+          PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: ubuntu24.04-x64
           PW_DEPS_DIR: ${{ github.workspace }}/.pw-deps
         run: |
           yarn playwright install --with-deps chromium || yarn playwright install chromium
@@ -124,6 +134,7 @@ jobs:
           # had to unpack them. chainstrip spreads process.env into its children, so
           # it reaches the browser without a config field.
           LD_LIBRARY_PATH: ${{ github.workspace }}/.pw-deps/usr/lib/x86_64-linux-gnu:${{ github.workspace }}/.pw-deps/lib/x86_64-linux-gnu
+          PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: ubuntu24.04-x64 # see the browser step
         run: $CHAINSTRIP run
 
       # WHAT FOLLOWS THE RUN, in the order the operating model names them:
@@ -166,6 +177,7 @@ jobs:
         if: steps.witness.outputs.accepted != 'skipped' && steps.witness.outputs.accepted != '0'
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/.pw-deps/usr/lib/x86_64-linux-gnu:${{ github.workspace }}/.pw-deps/lib/x86_64-linux-gnu
+          PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: ubuntu24.04-x64 # see the browser step
         run: $CHAINSTRIP run
       - name: cache the gate baseline
         uses: actions/cache/save@v4
