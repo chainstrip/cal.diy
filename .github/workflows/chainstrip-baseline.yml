@@ -217,6 +217,7 @@ jobs:
           name: baseline-report
           path: |
             .chainstrip/*-report.json
+            .chainstrip/*.log
             .chainstrip/coverage-prompt.md
             .chainstrip/witness-*.json
             .chainstrip/witness-prompt.md
