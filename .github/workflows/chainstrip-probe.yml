@@ -1,0 +1,148 @@
+name: chainstrip probe (a script on the runner holding the state)
+
+# ONE SCRIPT ON THE RUNNER THAT HOLDS A FINISHED OR FAILED BASELINE'S STATE,
+# with the project installed and the same services the baseline gets - and
+# nothing else. It exists so a question about a run can be answered in minutes
+# on the bytes that produced it, instead of by re-running three hours to reach
+# the same point. Checkout keeps untracked files (`.chainstrip` is untracked).
+# Pass the label of the runner holding the state; landing elsewhere finds none.
+#
+# Same concurrency group as the baseline, so a probe never runs beside one.
+
+on:
+  # DISPATCH ONLY. A baseline is a MEASUREMENT that occupies a runner for an
+  # hour or more, and nothing about a push tells you a measurement is wanted
+  # now. The `paths-ignore` lists this replaces were a partial fix for the same
+  # problem — they grew after a probe push started a full baseline 6 seconds
+  # before the probe was dispatched, leaving the measurement queued behind it —
+  # but they could not cover the case that kept recurring: editing THIS file.
+  # Every workflow fix (the artifact upload, the corepack ordering, the node
+  # bootstrap) started an unwanted baseline, twice landing two runs of the same
+  # target at once.
+  #
+  # The old argument for keeping the push trigger was that a change to this file
+  # DOES change the run. True, and it does not follow that the run should start
+  # by itself: the person editing it is the person who knows whether a fresh
+  # measurement is worth an hour of the box.
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "runs-on label of the runner holding the state (e.g. cal-state)"
+        required: true
+        default: "cal-state"
+      script:
+        description: "bash script to run in the checkout (multi-line)"
+        required: true
+        default: "ls -la .chainstrip"
+
+concurrency:
+  group: chainstrip-baseline
+  cancel-in-progress: false
+
+jobs:
+  warm:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: read # read @chainstrip/cli from GitHub Packages with the ambient token
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: chainstrip
+          POSTGRES_PASSWORD: chainstrip
+          POSTGRES_DB: chainstrip
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U chainstrip"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      CHAINSTRIP_RUN_ORIGIN: ci
+      DATABASE_URL: postgresql://chainstrip:chainstrip@localhost:5432/chainstrip
+      NEXTAUTH_SECRET: chainstrip-buildgate-secret-0123456789abcdef
+      CALENDSO_ENCRYPTION_KEY: chainstrip-buildgate-key-0123456789ab
+      NEXT_PUBLIC_WEBAPP_URL: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+      # `cache: yarn` makes setup-node shell out to `yarn --version` DURING its
+      # own step, so corepack has to be enabled BEFORE it runs. A GitHub-hosted
+      # image ships yarn on PATH and hides this; a self-hosted runner does not,
+      # and the step dies with "Unable to locate executable file: yarn" before
+      # any chainstrip step. So: provision node, enable corepack, THEN ask for
+      # the cache.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+      - run: yarn install --immutable
+      # cove2e runs the target's OWN e2e suite (`yarn e2e --grep login`, per
+      # chainstrip.config.json), and that needs a chromium the driver can find and
+      # start. Two things the project's own playwright action cannot give this
+      # runner:
+      #
+      # INSTALL THE BROWSER WHERE THE CHILD WILL LOOK. Playwright resolves its
+      # browsers under $HOME/.cache/ms-playwright by default; `0` keeps it inside
+      # node_modules, a directory the e2e child already has, and the config's
+      # e2e.env sets the same value so both halves look in one place.
+      #
+      # NO ROOT FOR THE SYSTEM LIBRARIES. `playwright install --with-deps` needs
+      # sudo, and the runner user has none - so the browser would install without
+      # its libraries and die at launch on `libnspr4.so: cannot open shared object
+      # file`, three hours in, at the last stage. `dpkg -x` unpacks the packages
+      # into a directory we own and the dynamic loader finds them through
+      # LD_LIBRARY_PATH; neither step needs privilege. The package list comes from
+      # playwright itself, so it tracks the browser build. Same recipe as the
+      # mattermost baseline, where it was measured to work.
+      #
+      # NOTHING HERE MAY FAIL THE STEP: `apt-get download` exits non-zero for a
+      # package the release does not ship separately, and a best-effort remedy
+      # that can abort the run is worse than no remedy.
+      - name: e2e browser (chromium, no-root libraries)
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: "0"
+          # THE RUNNER IS UBUNTU 26.04 AND PLAYWRIGHT 1.57 DOES NOT KNOW IT. MEASURED
+          # (run 34003559291): `playwright install chromium` died in 1.5 minutes with
+          # "Playwright does not support chromium on ubuntu26.04-x64". The project pins
+          # @playwright/test 1.57.0, which predates that release; mattermost's 1.61.1
+          # knows it, so the same recipe worked there. This is Playwright's own knob
+          # (hostPlatform.js reads it first): the 24.04 build runs on 26.04's newer
+          # glibc, and the noble package names it lists exist on 26.04 too. The same
+          # lookup happens again when the e2e child LAUNCHES the browser, so the run
+          # steps below carry it as well.
+          PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: ubuntu24.04-x64
+          PW_DEPS_DIR: ${{ github.workspace }}/.pw-deps
+        run: |
+          yarn playwright install --with-deps chromium || yarn playwright install chromium
+          BIN=$(ls -d node_modules/playwright-core/.local-browsers/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell 2>/dev/null | head -1)
+          if [ -n "$BIN" ] && ! ldd "$BIN" 2>/dev/null | grep -q "not found"; then
+            echo "chromium's libraries are already present - nothing to do"
+          else
+            echo "chromium is missing libraries and we have no root; unpacking them locally"
+            pkgs="$(yarn playwright install-deps --dry-run chromium 2>/dev/null | tr ' ' '\n' | grep -E '^lib[a-z0-9.+-]+$' | sort -u | tr '\n' ' ')"
+            [ -n "$pkgs" ] || pkgs="libnspr4 libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 libcups2t64 libdrm2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libasound2t64 libx11-6 libxcb1 libxext6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxshmfence1 libexpat1 libxcb-dri3-0"
+            echo "  packages: $pkgs"
+            (
+              mkdir -p "$PW_DEPS_DIR" && cd "$PW_DEPS_DIR" || exit 0
+              for one in $pkgs; do apt-get download "$one" 2>/dev/null || echo "    skip $one"; done
+              for d in *.deb; do [ -f "$d" ] || continue; dpkg -x "$d" . || true; done
+              echo "  unpacked $(find . -name '*.so*' 2>/dev/null | wc -l) shared objects into $PW_DEPS_DIR"
+            ) || echo "  local unpack did not complete - the browser may still fail to launch"
+          fi
+      - uses: ./.github/actions/setup-chainstrip
+        with:
+          version: ${{ vars.CHAINSTRIP_CLI_VERSION || 'latest' }}
+      - name: probe
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/.pw-deps/usr/lib/x86_64-linux-gnu:${{ github.workspace }}/.pw-deps/lib/x86_64-linux-gnu
+          PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: ubuntu24.04-x64
+          PROBE_SCRIPT: ${{ inputs.script }}
+        run: |
+          echo "runner: $RUNNER_NAME"
+          bash -c "$PROBE_SCRIPT"
