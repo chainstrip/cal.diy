@@ -1,0 +1,49 @@
+# Services for the cove2e pass (chainstrip.config.json `e2e.servicesUp`), for a
+# host with docker compose. macOS without Docker uses deploy/services.sh's Apple
+# Container path instead; that script chooses by what the host has.
+#
+#   docker compose -f deploy/compose.services.yml up -d --wait          # mailhog only
+#   docker compose -f deploy/compose.services.yml --profile db up -d --wait   # + postgres
+#
+# POSTGRES IS OPT-IN HERE, BEHIND THE `db` PROFILE. The CI baseline job already
+# runs postgres as a GitHub Actions service container on 5432 (the build gate
+# needs it), and the e2e block points DATABASE_URL at that same server. A second
+# postgres on the same port would fail to bind. A laptop with no other postgres
+# adds `--profile db`.
+#
+# Postgres data is EPHEMERAL: e2e runs want a clean DB, and Cal binds
+# CALENDSO_ENCRYPTION_KEY to stored rows - a stale volume plus a rotated key is
+# undecryptable data.
+name: caldiy-services
+services:
+  db:
+    profiles: ["db"]
+    image: postgres:16
+    container_name: caldiy-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: calendso
+    ports:
+      - "5432:5432"
+    healthcheck:
+      # cadence copied from cal's own CI service block (.github/workflows/e2e.yml)
+      test: ["CMD-SHELL", "pg_isready -U postgres -d calendso"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 2s
+  mailhog:
+    # jcalonso/mailhog is the multi-arch mirror of the same MailHog v1.0.1
+    # binary cal's CI uses (mailhog/mailhog is amd64-only). One image ref on
+    # every platform keeps the deploy uniform.
+    image: jcalonso/mailhog:v1.0.1
+    container_name: caldiy-mailhog
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8025/ || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 15

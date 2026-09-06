@@ -15,5 +15,38 @@
   },
   "update": {
     "block": ["retained-surface-changed", "validation-regression", "capability-escalation", "manual-review-required", "expanded-usage-vulnerable", "new-dependency", "reachable-cve"]
+  },
+  "e2e": {
+    "servicesUp": ["bash", "deploy/services.sh", "up"],
+    "servicesDown": ["bash", "deploy/services.sh", "down"],
+    "seedCommand": ["yarn", "db-seed"],
+    "serverCommand": ["yarn", "workspace", "@calcom/web", "start", "-p", "3000"],
+    "browserCoverage": true,
+    "readyUrl": "http://localhost:3000/auth/login",
+    "testCommand": ["yarn", "e2e", "--grep", "login"],
+    "gate": "report",
+    "env": {
+      "DATABASE_URL": "postgresql://chainstrip:chainstrip@localhost:5432/chainstrip",
+      "DATABASE_DIRECT_URL": "postgresql://chainstrip:chainstrip@localhost:5432/chainstrip",
+      "NEXTAUTH_URL": "http://localhost:3000",
+      "NEXT_PUBLIC_WEBAPP_URL": "http://localhost:3000",
+      "NEXT_PUBLIC_IS_E2E": "1",
+      "NEXTAUTH_SECRET": "chainstrip-cove2e-secret-0123456789abcdef",
+      "CALENDSO_ENCRYPTION_KEY": "chainstrip-cove2e-key-0123456789",
+      "E2E_TEST_MAILHOG_ENABLED": "1",
+      "EMAIL_FROM": "e2e@localhost",
+      "EMAIL_SERVER_HOST": "localhost",
+      "EMAIL_SERVER_PORT": "1025",
+      "PLAYWRIGHT_HEADLESS": "1",
+      "PLAYWRIGHT_BROWSERS_PATH": "0",
+      "NODE_OPTIONS": "--dns-result-order=ipv4first"
+    }
+  },
+  "witness": {
+    "llm": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-5",
+      "apiKeyEnv": "ANTHROPIC_API_KEY"
+    }
   }
 }

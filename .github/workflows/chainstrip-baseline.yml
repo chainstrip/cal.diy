@@ -31,7 +31,7 @@ concurrency:
 jobs:
   warm:
     runs-on: ${{ vars.CHAINSTRIP_LARGE_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 330
+    timeout-minutes: 720 # a run, the campaign, and a possible rerun
     permissions:
       contents: read
       packages: read # read @chainstrip/cli from GitHub Packages with the ambient token
@@ -69,10 +69,103 @@ jobs:
           node-version: 20
           cache: yarn
       - run: yarn install --immutable
+      # cove2e runs the target's OWN e2e suite (`yarn e2e --grep login`, per
+      # chainstrip.config.json), and that needs a chromium the driver can find and
+      # start. Two things the project's own playwright action cannot give this
+      # runner:
+      #
+      # INSTALL THE BROWSER WHERE THE CHILD WILL LOOK. Playwright resolves its
+      # browsers under $HOME/.cache/ms-playwright by default; `0` keeps it inside
+      # node_modules, a directory the e2e child already has, and the config's
+      # e2e.env sets the same value so both halves look in one place.
+      #
+      # NO ROOT FOR THE SYSTEM LIBRARIES. `playwright install --with-deps` needs
+      # sudo, and the runner user has none - so the browser would install without
+      # its libraries and die at launch on `libnspr4.so: cannot open shared object
+      # file`, three hours in, at the last stage. `dpkg -x` unpacks the packages
+      # into a directory we own and the dynamic loader finds them through
+      # LD_LIBRARY_PATH; neither step needs privilege. The package list comes from
+      # playwright itself, so it tracks the browser build. Same recipe as the
+      # mattermost baseline, where it was measured to work.
+      #
+      # NOTHING HERE MAY FAIL THE STEP: `apt-get download` exits non-zero for a
+      # package the release does not ship separately, and a best-effort remedy
+      # that can abort the run is worse than no remedy.
+      - name: e2e browser (chromium, no-root libraries)
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: "0"
+          PW_DEPS_DIR: ${{ github.workspace }}/.pw-deps
+        run: |
+          yarn playwright install --with-deps chromium || yarn playwright install chromium
+          BIN=$(ls -d node_modules/playwright-core/.local-browsers/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell 2>/dev/null | head -1)
+          if [ -n "$BIN" ] && ! ldd "$BIN" 2>/dev/null | grep -q "not found"; then
+            echo "chromium's libraries are already present - nothing to do"
+          else
+            echo "chromium is missing libraries and we have no root; unpacking them locally"
+            pkgs="$(yarn playwright install-deps --dry-run chromium 2>/dev/null | tr ' ' '\n' | grep -E '^lib[a-z0-9.+-]+$' | sort -u | tr '\n' ' ')"
+            [ -n "$pkgs" ] || pkgs="libnspr4 libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 libcups2t64 libdrm2 libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libasound2t64 libx11-6 libxcb1 libxext6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxshmfence1 libexpat1 libxcb-dri3-0"
+            echo "  packages: $pkgs"
+            (
+              mkdir -p "$PW_DEPS_DIR" && cd "$PW_DEPS_DIR" || exit 0
+              for one in $pkgs; do apt-get download "$one" 2>/dev/null || echo "    skip $one"; done
+              for d in *.deb; do [ -f "$d" ] || continue; dpkg -x "$d" . || true; done
+              echo "  unpacked $(find . -name '*.so*' 2>/dev/null | wc -l) shared objects into $PW_DEPS_DIR"
+            ) || echo "  local unpack did not complete - the browser may still fail to launch"
+          fi
       - uses: ./.github/actions/setup-chainstrip
         with:
           version: ${{ vars.CHAINSTRIP_CLI_VERSION || 'latest' }}
       - name: build baseline
+        env:
+          # SCOPED TO THIS STEP, not the job. LD_LIBRARY_PATH takes precedence over
+          # the system paths, so a directory holding a conflicting copy of a common
+          # library would change what every other child links against. It carries
+          # chromium's own dependencies only, and it is empty unless the step above
+          # had to unpack them. chainstrip spreads process.env into its children, so
+          # it reaches the browser without a config field.
+          LD_LIBRARY_PATH: ${{ github.workspace }}/.pw-deps/usr/lib/x86_64-linux-gnu:${{ github.workspace }}/.pw-deps/lib/x86_64-linux-gnu
+        run: $CHAINSTRIP run
+
+      # WHAT FOLLOWS THE RUN, in the order the operating model names them:
+      # coverage --prompt, witness campaign, rerun. Each rerun is conditional and
+      # says why it ran or did not.
+      #
+      # `coverage --prompt` writes the test-writing worklist
+      # (.chainstrip/coverage-prompt.md) for a person or an agent session. Nothing
+      # in this job consumes it, so no test file is added here and the rerun that
+      # would follow new tests is never necessary in CI. The prompt ships in the
+      # report artifact instead.
+      - name: coverage prompt
+        run: $CHAINSTRIP coverage --prompt
+
+      # The campaign is the LLM-driven evidence gatherer. Its key lives in the repo
+      # secret ANTHROPIC_API_KEY; the config's witness.llm.apiKeyEnv names it and
+      # the key is never in config. A missing secret is reported, not papered
+      # over: the step is skipped by name, and the rerun below has nothing to act on.
+      - name: witness campaign
+        id: witness
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::warning title=witness campaign skipped::repo secret ANTHROPIC_API_KEY is not set (witness.llm.apiKeyEnv names it). Add it with: gh secret set ANTHROPIC_API_KEY -R ${{ github.repository }}, then re-dispatch."
+            echo "accepted=skipped" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          $CHAINSTRIP witness --campaign
+          accepted="$(node -e "const r=require('./.chainstrip/witness-report.json');console.log((r.probes||[]).filter(p=>p.verdict==='accepted').length)")"
+          echo "accepted probes: $accepted"
+          echo "accepted=$accepted" >> "$GITHUB_OUTPUT"
+
+      # A rerun is necessary exactly when the campaign accepted a probe. An accepted
+      # probe joins per-dep validation only on the NEXT sweep - that is what turns a
+      # no-mapped-tests dep into a validated extraction - and covtrim unions the
+      # witness capture on that run. Zero accepted probes change nothing, so the
+      # rerun is skipped. trace auto-skips on a current test-impact map.
+      - name: rerun with the witness evidence
+        if: steps.witness.outputs.accepted != 'skipped' && steps.witness.outputs.accepted != '0'
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/.pw-deps/usr/lib/x86_64-linux-gnu:${{ github.workspace }}/.pw-deps/lib/x86_64-linux-gnu
         run: $CHAINSTRIP run
       - name: cache the gate baseline
         uses: actions/cache/save@v4
@@ -101,6 +194,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: baseline-report
-          path: .chainstrip/*-report.json
+          path: |
+            .chainstrip/*-report.json
+            .chainstrip/coverage-prompt.md
+            .chainstrip/witness-*.json
+            .chainstrip/witness-prompt.md
           include-hidden-files: true
           if-no-files-found: warn
