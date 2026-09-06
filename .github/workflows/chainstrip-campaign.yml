@@ -189,7 +189,21 @@ jobs:
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/.pw-deps/usr/lib/x86_64-linux-gnu:${{ github.workspace }}/.pw-deps/lib/x86_64-linux-gnu
           PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: ubuntu24.04-x64 # see the browser step
-        run: $CHAINSTRIP run
+        # --allow-red-baseline IS FOR covtrim's CAPTURE, and it is a measured
+        # decision, not a shortcut. On builder-1 (run 34029847959) the capture
+        # suite exited 1 in 6 of 8 rounds with no failing file named, so the
+        # guard could not re-confirm and stopped the run - after cove2e had
+        # captured 4749 browser-executed functions. Seventeen direct replays of
+        # the same suite on the same runner - stock and overlaid, with and without
+        # V8 coverage, with the flusher, under CI=1 - all passed 4047 tests
+        # (probes 34038225715, 34038582924, 34038888080, 34039303610). The stock
+        # preflight in the same run was green. What differs at capture time is
+        # covtrim's cooperative provider, which chainstrip deletes after use and
+        # whose output it does not keep, so the exit 1 cannot be attributed from
+        # what exists. Until chainstrip persists that output, every covtrim claim
+        # from this target is labelled DEGRADED by the flag, which is the honest
+        # reading. sweep's preflight is unaffected: it is green here.
+        run: $CHAINSTRIP run --allow-red-baseline
 
       # The prompt ranks CVE-bearing deps first ONLY when a reachability report
       # exists; without one it says so and ranks by coverage alone (measured on the
