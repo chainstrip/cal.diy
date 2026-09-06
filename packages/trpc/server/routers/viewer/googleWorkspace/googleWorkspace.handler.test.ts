@@ -17,6 +17,25 @@ vi.mock("@calcom/app-store/_utils/getAppKeysFromSlug", () => ({
   default: vi.fn(),
 }));
 
+// Replace only the transport: the real @googleapis/admin client builds the Directory
+// request and hands it to the auth client's `request`, which is where the network would go.
+const { directoryRequest } = vi.hoisted(() => ({ directoryRequest: vi.fn() }));
+vi.mock("google-auth-library", () => ({
+  OAuth2Client: class FakeOAuth2Client {
+    credentials: unknown = null;
+    constructor(public clientId: string, public clientSecret: string) {}
+    setCredentials(credentials: unknown) {
+      this.credentials = credentials;
+    }
+    getRequestHeaders() {
+      return {};
+    }
+    request(options: unknown) {
+      return directoryRequest(options);
+    }
+  },
+}));
+
 // Factory function to create mock user context
 const createMockContext = (overrides: Partial<TrpcSessionUser> = {}) => ({
   ctx: {
@@ -113,6 +132,42 @@ describe("googleWorkspace.handler", () => {
           userId: 99,
         },
       });
+    });
+
+    it("lists the workspace users through the Directory API and returns their primary emails", async () => {
+      vi.mocked(getAppKeysFromSlug).mockResolvedValue({
+        client_id: "mock_client_id",
+        client_secret: "mock_client_secret",
+      });
+      vi.mocked(prisma.credential.findFirst).mockResolvedValue(createMockCredential());
+      directoryRequest.mockResolvedValue({
+        data: {
+          users: [
+            { primaryEmail: "alice@acme.example", name: { fullName: "Alice" } },
+            { primaryEmail: "bob@acme.example", name: { fullName: "Bob" } },
+          ],
+        },
+      });
+
+      const emails = await handlers.getUsersFromGWorkspace(createMockContext({ id: 7 }));
+
+      expect(emails).toEqual(["alice@acme.example", "bob@acme.example"]);
+      expect(directoryRequest).toHaveBeenCalledTimes(1);
+      const options = directoryRequest.mock.calls[0][0] as { url: string; method: string; params: Record<string, unknown> };
+      expect(options.method).toBe("GET");
+      expect(options.url).toBe("https://admin.googleapis.com/admin/directory/v1/users");
+      expect(options.params).toEqual(expect.objectContaining({ maxResults: 200, customer: "my_customer" }));
+    });
+
+    it("returns an empty list when the directory has no users", async () => {
+      vi.mocked(getAppKeysFromSlug).mockResolvedValue({
+        client_id: "mock_client_id",
+        client_secret: "mock_client_secret",
+      });
+      vi.mocked(prisma.credential.findFirst).mockResolvedValue(createMockCredential());
+      directoryRequest.mockResolvedValue({ data: {} });
+
+      await expect(handlers.getUsersFromGWorkspace(createMockContext())).resolves.toEqual([]);
     });
 
     it("throws error when Google client_id is missing", async () => {
